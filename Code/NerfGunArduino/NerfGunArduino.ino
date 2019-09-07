@@ -4,7 +4,7 @@
 
 #define NUMPIXELS 14 // Number of LEDs in strip
 
-Adafruit_DotStar ledstrip = Adafruit_DotStar(NUMPIXELS, DOTSTAR_RGB);
+Adafruit_DotStar ledstrip = Adafruit_DotStar(NUMPIXELS, DOTSTAR_BGR);
 
 #define spinmotor1pin 9 // off = high
 #define spinmotor2pin 8 // on = low
@@ -14,8 +14,8 @@ Adafruit_DotStar ledstrip = Adafruit_DotStar(NUMPIXELS, DOTSTAR_RGB);
 #define readypin 3
 #define magazinepin 4
 
-#define riospinuppin A7 // floating
-#define riofirepin A6
+#define riospinuppin 2 // floating
+#define riofirepin 6
 
 
 
@@ -55,7 +55,7 @@ uint32_t firingcolor = ledstrip.Color(255,255,0);
 
 byte spinseqstep = 0;
 
-byte sequence = seq_safe;
+byte sequence = seq_spinningup;
 
 long lastseqchangetime =0;
 
@@ -67,6 +67,7 @@ void loop() {
 //    if(sequence > maxsequenceval)
 //      sequence = 0;
 //  }
+
   switch(sequence){
     case seq_safe:
       show_safe();
@@ -86,14 +87,19 @@ void loop() {
     default:
       show_safe();
   }
-  delay(5);
+  delay(10);
 
-  if(digitalRead(riospinuppin) == HIGH){
+  if(digitalRead(riospinuppin) == HIGH && (sequence == seq_safe || sequence == seq_spinningdown)){
     if(issafetospin())
       sequence = seq_spinningup;
   }
 
   if(digitalRead(riofirepin) == HIGH && sequence == seq_spinningready){
+//    for(int n=0; n<NUMPIXELS; n++){
+//      ledstrip.setPixelColor(n,255,0,255);
+//    }
+//    ledstrip.show();
+//    delay(100);
     if(issafetospin())
       sequence = seq_firing;
   }
@@ -184,10 +190,12 @@ void show_spinningdown(){
 
 bool issafetospin(){
   bool ret = true;
-  if(digitalRead(magazinepin) == HIGH)
+  if(digitalRead(magazinepin) == HIGH){
     ret = false;
-  if(digitalRead(riospinuppin) == LOW)
+  }
+  if(digitalRead(riospinuppin) == LOW){
     ret = false;
+  }
   return ret;
 }
 
@@ -201,4 +209,3 @@ void spinup(){
   digitalWrite(spinmotor1pin, LOW);
   digitalWrite(spinmotor2pin, LOW);
 }
-
