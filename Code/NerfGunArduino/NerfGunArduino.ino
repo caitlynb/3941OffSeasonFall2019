@@ -1,6 +1,7 @@
 #include <Adafruit_DotStar.h>
 #include <SPI.h>
 
+const bool enablemotors = true;
 
 #define NUMPIXELS 14 // Number of LEDs in strip
 
@@ -17,7 +18,15 @@ Adafruit_DotStar ledstrip = Adafruit_DotStar(NUMPIXELS, DOTSTAR_BGR);
 #define riospinuppin 2 // floating
 #define riofirepin 6
 
+long motorspinuptime = 0;
+long motorfiretime = 0;
+long cooldowntimer = 0;
+long timenow = 0;
+const long motorspinupmaxtime = 10000;
+const long motorfiremaxtime = 5000;
+const long motorcooldowntime = 4000;
 
+bool overheat = false;
 
 void setup() {
 
@@ -36,6 +45,7 @@ void setup() {
   digitalWrite(spinmotor1pin, HIGH);
   digitalWrite(spinmotor2pin, HIGH);
   digitalWrite(feedmotorpin, HIGH);
+
   
 }
 
@@ -45,120 +55,133 @@ const byte seq_spinningup = 1;
 const byte seq_spinningready = 2;
 const byte seq_firing = 3;
 const byte seq_spinningdown = 4;
+const byte seqcooldown = 5;
 
 const byte maxsequenceval = 4;
 
 uint32_t safecolor = ledstrip.Color(0,255,0);
-uint32_t spinningreadycolor = ledstrip.Color(0,0,255);
+uint32_t spinningreadycolor = ledstrip.Color(0,125,255);
 uint32_t firingcolor = ledstrip.Color(255,255,0);
 
 
 byte spinseqstep = 0;
 
-byte sequence = seq_spinningup;
+byte sequence = seq_safe;
 
-long lastseqchangetime =0;
+//long lastseqchangetime =0;
 
-void loop() {
-//  long timenow = millis();
-//  if(timenow > lastseqchangetime+5000){
-//    lastseqchangetime = timenow;
-//    sequence += 1;
-//    if(sequence > maxsequenceval)
-//      sequence = 0;
-//  }
 
-  switch(sequence){
-    case seq_safe:
-      show_safe();
-      break;
-    case seq_spinningup:
-      show_spinningup();
-      break;
-    case seq_spinningready:
-      show_spinningready();
-      break;
-    case seq_firing:
-      show_firing();
-      break;
-    case seq_spinningdown:
-      show_spinningdown();
-      break;
-    default:
-      show_safe();
+
+void cooldown(){
+  safesystem();
+  int n=0;
+  if(overheat == true){
+    for(n=0; n<NUMPIXELS; n++){
+      if(n%2==0){
+        ledstrip.setPixelColor(n, 255,0,0);
+      } else {
+        ledstrip.setPixelColor(n,255,255,255);
+      }
+    }
   }
-  delay(10);
-
-  if(digitalRead(riospinuppin) == HIGH && (sequence == seq_safe || sequence == seq_spinningdown)){
-    if(issafetospin())
-      sequence = seq_spinningup;
-  }
-
-  if(digitalRead(riofirepin) == HIGH && sequence == seq_spinningready){
-//    for(int n=0; n<NUMPIXELS; n++){
-//      ledstrip.setPixelColor(n,255,0,255);
-//    }
-//    ledstrip.show();
-//    delay(100);
-    if(issafetospin())
-      sequence = seq_firing;
-  }
-  
+  ledstrip.show();
+  delay(motorcooldowntime);
+//  timenow = millis();
+  motorspinuptime = 0;
+  motorfiretime = 0;
+  overheat = false;
+  sequence = seq_safe;
 }
 
 void show_safe(){
   safesystem();
   int n=0;
-  for(n=0; n<NUMPIXELS; n++){
-    ledstrip.setPixelColor(n, safecolor);
+  if(overheat == true){
+    for(n=0; n<NUMPIXELS; n++){
+      ledstrip.setPixelColor(n, 255,255,255);
+    }
+  } else {
+    for(n=0; n<NUMPIXELS; n++){
+      ledstrip.setPixelColor(n, safecolor);
+    }
   }
   ledstrip.show();
+  timenow = millis();
+  motorspinuptime = 0;
+  motorfiretime = 0;
 }
 
 void show_spinningup(){
   byte i;
-  spinup(); // turn on spin motors
-  for(i = spinseqstep; i < 250; i+= 5){
-    spinseqstep = i;
-    if(!issafetospin()){
-      // abort
-      sequence = seq_spinningdown;
-      safesystem();
-      break;
+  timenow = millis();
+  if(issafetospin() && timenow - motorspinuptime < motorspinupmaxtime){
+    if(enablemotors){
+      spinup(); // turn on spin motors
     }
-    for(int n=0; n<NUMPIXELS; n++){
-      ledstrip.setPixelColor(n, 255-i, 0, i);
+    for(i = spinseqstep; i < 250; i+= 5){
+      spinseqstep = i;
+      if(!issafetospin()){
+        // abort
+        sequence = seq_spinningdown;
+        safesystem();
+        break;
+      }
+      for(int n=0; n<NUMPIXELS; n++){
+        ledstrip.setPixelColor(n, 255-i, 0, i);
+      }
+      ledstrip.show();
+      delay(15);
     }
-    ledstrip.show();
-    delay(10);
-  }
-  if(spinseqstep >= 250){
-    sequence = seq_spinningready;
+    if(spinseqstep >= 245){
+      sequence = seq_spinningready;
+    }
+  } else { // spin up time check
+    overheat = true;
+    safesystem(); // spin down
+    spinseqstep = 250;
+    sequence = seq_spinningdown;
   }
 }
 
 void show_spinningready(){
+  timenow = millis();
   if(!issafetospin()){
     // abort
     sequence = seq_spinningdown;
+    safesystem();
+  }
+  if( timenow - motorspinuptime > motorspinupmaxtime){
+    overheat = true;
+    sequence = seq_spinningdown;
+    spinseqstep = 250;
     safesystem();
   }
   for(int n=0; n<NUMPIXELS; n++){
     ledstrip.setPixelColor(n, spinningreadycolor);
   }
   ledstrip.show();
+  //delay(1000);
 }
 
 void show_firing(){
+  
   if(!issafetospin()){
     // abort
+    spinseqstep = 250;
+    sequence = seq_spinningdown;
+    safesystem();
+  } else if(millis() - motorfiretime > motorfiremaxtime){
+    overheat = true;
+    spinseqstep = 250;
     sequence = seq_spinningdown;
     safesystem();
   } else if(digitalRead(riofirepin) == LOW) {
     sequence = seq_spinningready;
     digitalWrite(feedmotorpin, HIGH);
   } else {
-    digitalWrite(feedmotorpin, LOW);
+    if(enablemotors){
+      digitalWrite(feedmotorpin, LOW);
+    }
     for(int n=0; n<NUMPIXELS; n++){
       ledstrip.setPixelColor(n, firingcolor);
     }
@@ -171,20 +194,24 @@ void show_spinningdown(){
   safesystem(); // turnoff motors
   for(i = spinseqstep; i > 0; i-= 5){
     spinseqstep = i;
-    if(issafetospin()){
-      // resume spinning
-      sequence = seq_spinningup;
-      safesystem();
-      break;
-    }
+//    if(issafetospin() && overheat== false){
+//      // resume spinning
+////      spinseqstep=0;
+//      sequence = seq_spinningup;
+////      safesystem();
+//      break;
+//    }
     for(int n=0; n<NUMPIXELS; n++){
       ledstrip.setPixelColor(n, 255-i, 0, i);
     }
     ledstrip.show();
-    delay(20);
+    delay(30);
   }
-  if(spinseqstep <= 5){
-    sequence = seq_safe;
+  sequence = seq_safe;
+  spinseqstep = 0;
+  if(overheat == true){
+    sequence = seqcooldown;
+    cooldowntimer = motorcooldowntime;
   }
 }
 
@@ -209,3 +236,51 @@ void spinup(){
   digitalWrite(spinmotor1pin, LOW);
   digitalWrite(spinmotor2pin, LOW);
 }
+
+void loop() {
+
+  switch(sequence){
+    case seq_safe:
+      show_safe();
+      break;
+    case seq_spinningup:
+      show_spinningup();
+      break;
+    case seq_spinningready:
+      show_spinningready();
+      break;
+    case seq_firing:
+      show_firing();
+      break;
+    case seq_spinningdown:
+      show_spinningdown();
+      break;
+    case seqcooldown:
+      cooldown();
+      break;
+    default:
+      show_safe();
+  }
+  delay(10);
+
+    if(digitalRead(riospinuppin) == HIGH && sequence == seq_safe){
+      if(issafetospin()){
+        motorspinuptime = millis();
+        sequence = seq_spinningup;
+      }
+    }
+  
+  //  if(digitalRead(riospinuppin) == HIGH && sequence == seq_spinningdown){
+  //    if(millis() - motorspinuptime > 
+  //  }
+  
+    if(digitalRead(riofirepin) == HIGH && sequence == seq_spinningready){
+      if(issafetospin()){
+        motorfiretime = millis();
+        sequence = seq_firing;
+      }
+    }
+    
+    
+}
+
